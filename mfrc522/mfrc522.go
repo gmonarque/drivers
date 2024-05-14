@@ -11,16 +11,15 @@ package mfrc522
 
 import (
 	"fmt"
+	"machine"
 	"sync"
 	"time"
 
-	"periph.io/x/conn/v3"
-	"periph.io/x/conn/v3/gpio"
-	"periph.io/x/conn/v3/spi"
+	"tinygo.org/x/drivers"
 )
 
-// Dev is an handle to an MFRC522 RFID reader.
-type Dev struct {
+// Device is an handle to an MFRC522 RFID reader.
+type Device struct {
 	LowLevel         *LowLevel
 	operationTimeout time.Duration
 	beforeCall       func()
@@ -83,7 +82,7 @@ func noop() {}
 //	resetPin    reset GPIO pin.
 //	irqPin      irq GPIO pin.
 //	configs     configuration options
-func NewSPI(spiPort spi.Port, resetPin gpio.PinOut, irqPin gpio.PinIn, configs ...configF) (*Dev, error) {
+func NewSPI(spiPort drivers.SPI, resetPin machine.Pin, irqPin machine.Pin, configs ...configF) (*Device, error) {
 	cfg := &config{
 		defaultTimeout: 30 * time.Second,
 		beforeCall:     noop,
@@ -101,7 +100,7 @@ func NewSPI(spiPort spi.Port, resetPin gpio.PinOut, irqPin gpio.PinIn, configs .
 		return nil, err
 	}
 
-	dev := &Dev{
+	dev := &Device{
 		LowLevel:         raw,
 		operationTimeout: cfg.defaultTimeout,
 		beforeCall:       cfg.beforeCall,
@@ -112,14 +111,14 @@ func NewSPI(spiPort spi.Port, resetPin gpio.PinOut, irqPin gpio.PinIn, configs .
 }
 
 // String implements conn.Resource.
-func (r *Dev) String() string {
+func (r *Device) String() string {
 	return r.LowLevel.String()
 }
 
 // Halt implements conn.Resource.
 //
 // It soft-stops the chip - PowerDown bit set, command IDLE
-func (r *Dev) Halt() error {
+func (r *Device) Halt() error {
 	r.beforeCall()
 	defer r.afterCall()
 	return r.LowLevel.Halt()
@@ -128,7 +127,7 @@ func (r *Dev) Halt() error {
 // SetAntennaGain configures antenna signal strength.
 //
 //	gain    signal strength from 0 to 7.
-func (r *Dev) SetAntennaGain(gain int) error {
+func (r *Device) SetAntennaGain(gain int) error {
 	r.beforeCall()
 	defer r.afterCall()
 	if gain < 0 || gain > 7 {
@@ -141,7 +140,7 @@ func (r *Dev) SetAntennaGain(gain int) error {
 // ReadUID reads the 4-byte or 7-byte card UID with IRQ event timeout.
 //
 //	timeout   the operation timeout
-func (r *Dev) ReadUID(timeout time.Duration) (uid []byte, err error) {
+func (r *Device) ReadUID(timeout time.Duration) (uid []byte, err error) {
 	r.beforeCall()
 	defer func() {
 		r.afterCall()
@@ -159,7 +158,7 @@ func (r *Dev) ReadUID(timeout time.Duration) (uid []byte, err error) {
 //	sector    the sector to authenticate on.
 //	block     the block within sector to authenticate.
 //	key       the key to be used for accessing the sector data.
-func (r *Dev) ReadCard(timeout time.Duration, auth byte, sector int, block int, key Key) (data []byte, err error) {
+func (r *Device) ReadCard(timeout time.Duration, auth byte, sector int, block int, key Key) (data []byte, err error) {
 	r.beforeCall()
 	defer func() {
 		r.afterCall()
@@ -188,7 +187,7 @@ func (r *Dev) ReadCard(timeout time.Duration, auth byte, sector int, block int, 
 //	auth       authentication type
 //	sector     the sector to authenticate on.
 //	key        the key to be used for accessing the sector data.
-func (r *Dev) ReadAuth(timeout time.Duration, auth byte, sector int, key Key) (data []byte, err error) {
+func (r *Device) ReadAuth(timeout time.Duration, auth byte, sector int, key Key) (data []byte, err error) {
 	r.beforeCall()
 	defer func() {
 		r.afterCall()
@@ -220,7 +219,7 @@ func (r *Dev) ReadAuth(timeout time.Duration, auth byte, sector int, key Key) (d
 //	block       the block within the sector to write into.
 //	data        16 bytes if data to write
 //	key          the key used to authenticate the card - depends on the used auth method.
-func (r *Dev) WriteCard(timeout time.Duration, auth byte, sector int, block int, data [16]byte, key Key) (err error) {
+func (r *Device) WriteCard(timeout time.Duration, auth byte, sector int, block int, data [16]byte, key Key) (err error) {
 	r.beforeCall()
 	defer func() {
 		r.afterCall()
@@ -253,7 +252,7 @@ func (r *Dev) WriteCard(timeout time.Duration, auth byte, sector int, block int,
 //	keyB      the key used for AuthB authentication scheme.
 //	access    the block access structure.
 //	key       the current key used to authenticate the provided sector.
-func (r *Dev) WriteSectorTrail(timeout time.Duration, auth byte, sector int, keyA Key, keyB Key, access *BlocksAccess, key Key) (err error) {
+func (r *Device) WriteSectorTrail(timeout time.Duration, auth byte, sector int, keyA Key, keyB Key, access *BlocksAccess, key Key) (err error) {
 	r.beforeCall()
 	defer func() {
 		r.afterCall()
@@ -285,10 +284,10 @@ func (r *Dev) WriteSectorTrail(timeout time.Duration, auth byte, sector int, key
 	return r.write(calcBlockAddress(sector&0xFF, 3), data[:])
 }
 
-//         MFRC522 SPI Dev private/helper functions
+//         MFRC522 SPI Device private/helper functions
 
 // request the card information. Returns number of blocks available on the card.
-func (r *Dev) request() (int, error) {
+func (r *Device) request() (int, error) {
 	backBits := -1
 	if err := r.LowLevel.DevWrite(BitFramingReg, 0x07); err != nil {
 		return backBits, err
@@ -304,7 +303,7 @@ func (r *Dev) request() (int, error) {
 }
 
 // antiColl performs the collision check for different cards.
-func (r *Dev) antiColl() ([]byte, error) {
+func (r *Device) antiColl() ([]byte, error) {
 	if err := r.LowLevel.DevWrite(BitFramingReg, 0x00); err != nil {
 		return nil, err
 	}
@@ -333,7 +332,7 @@ func (r *Dev) antiColl() ([]byte, error) {
 }
 
 // antiColl2 performs additional anticollision check for UIDs with more than 4 bytes.
-func (r *Dev) antiColl2() ([]byte, error) {
+func (r *Device) antiColl2() ([]byte, error) {
 	if err := r.LowLevel.DevWrite(BitFramingReg, 0x00); err != nil {
 		return nil, err
 	}
@@ -362,7 +361,7 @@ func (r *Dev) antiColl2() ([]byte, error) {
 }
 
 // selectTag selects the FOB device by device UUID.
-func (r *Dev) selectTag(serial []byte) (byte, error) {
+func (r *Device) selectTag(serial []byte) (byte, error) {
 	dataBuf := make([]byte, len(serial)+2)
 	dataBuf[0] = PICC_SElECTTAG
 	dataBuf[1] = 0x70
@@ -391,12 +390,12 @@ func (r *Dev) selectTag(serial []byte) (byte, error) {
 //
 //	sector - card sector to read from
 //	block - the block within the sector (0-3 tor Mifare 4K)
-func (r *Dev) readBlock(sector int, block int) ([]byte, error) {
+func (r *Device) readBlock(sector int, block int) ([]byte, error) {
 	return r.read(calcBlockAddress(sector, block%3))
 }
 
 // selectCard selects the card after the IRQ event was received.
-func (r *Dev) selectCard(timeout time.Duration) ([]byte, error) {
+func (r *Device) selectCard(timeout time.Duration) ([]byte, error) {
 	if err := r.LowLevel.WaitForEdge(timeout); err != nil {
 		return nil, err
 	}
@@ -440,7 +439,7 @@ func (r *Dev) selectCard(timeout time.Duration) ([]byte, error) {
 //
 // blockAddr - the calculated block address
 // data - the sector data bytes
-func (r *Dev) write(blockAddr byte, data []byte) error {
+func (r *Device) write(blockAddr byte, data []byte) error {
 	read, backLen, err := r.preAccess(blockAddr, PICC_WRITE)
 	if err != nil || backLen != 4 {
 		return err
@@ -470,7 +469,7 @@ func (r *Dev) write(blockAddr byte, data []byte) error {
 //
 //	blockAddr - the block address to access.
 //	cmd - command code to perform on the given block,
-func (r *Dev) preAccess(blockAddr byte, cmd byte) ([]byte, int, error) {
+func (r *Device) preAccess(blockAddr byte, cmd byte) ([]byte, int, error) {
 	send := make([]byte, 4)
 	send[0] = cmd
 	send[1] = blockAddr
@@ -487,7 +486,7 @@ func (r *Dev) preAccess(blockAddr byte, cmd byte) ([]byte, int, error) {
 // read  reads the block
 //
 //	blockAddr the address to read from the card.
-func (r *Dev) read(blockAddr byte) ([]byte, error) {
+func (r *Device) read(blockAddr byte) ([]byte, error) {
 	data, _, err := r.preAccess(blockAddr, PICC_READ)
 	if err != nil {
 		return nil, err
@@ -501,5 +500,3 @@ func (r *Dev) read(blockAddr byte) ([]byte, error) {
 func wrapf(format string, a ...interface{}) error {
 	return fmt.Errorf("mfrc522: "+format, a...)
 }
-
-var _ conn.Resource = &Dev{}

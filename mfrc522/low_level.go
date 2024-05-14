@@ -6,11 +6,10 @@ package mfrc522
 
 import (
 	"fmt"
+	"machine"
 	"time"
 
-	"periph.io/x/conn/v3/gpio"
-	"periph.io/x/conn/v3/physic"
-	"periph.io/x/conn/v3/spi"
+	"tinygo.org/x/drivers"
 )
 
 // Card authentication status enum.
@@ -22,9 +21,9 @@ const (
 
 // LowLevel is a low-level handler of a MFRC522 RFID reader.
 type LowLevel struct {
-	resetPin    gpio.PinOut
-	irqPin      gpio.PinIn
-	spiDev      spi.Conn
+	resetPin    machine.Pin
+	irqPin      machine.Pin
+	bus         drivers.SPI
 	antennaGain int
 	stop        chan struct{}
 }
@@ -38,25 +37,17 @@ type AuthStatus byte
 //	spiPort - the SPI device to use.
 //	resetPin - reset GPIO pin.
 //	irqPin - irq GPIO pin.
-func NewLowLevelSPI(spiPort spi.Port, resetPin gpio.PinOut, irqPin gpio.PinIn) (*LowLevel, error) {
-	if resetPin == nil {
-		return nil, wrapf("reset pin is not set")
+func NewLowLevelSPI(bus drivers.SPI, resetPin machine.Pin, irqPin machine.Pin) (*LowLevel, error) {
+	if &resetPin == nil {
+		return nil, wrapfLow("reset pin is not set")
 	}
-	spiDev, err := spiPort.Connect(10*physic.MegaHertz, spi.Mode0, 8)
-	if err != nil {
-		return nil, err
-	}
-	if err := resetPin.Out(gpio.High); err != nil {
-		return nil, err
-	}
-	if irqPin != nil {
-		if err := irqPin.In(gpio.PullUp, gpio.FallingEdge); err != nil {
-			return nil, err
-		}
-	}
+	resetPin.Configure(machine.PinConfig{Mode: machine.PinOutput})
+	resetPin.High()
+	irqPin.Configure(machine.PinConfig{Mode: machine.PinInputPullup})
+	irqPin.SetInterrupt(machine.PinFalling, nil)
 
 	dev := &LowLevel{
-		spiDev:      spiDev,
+		bus:         bus,
 		irqPin:      irqPin,
 		resetPin:    resetPin,
 		antennaGain: 4,
@@ -104,7 +95,7 @@ func (r *LowLevel) SetAntenna(state bool) error {
 			return err
 		}
 		if current&0x03 != 0 {
-			return wrapf("can not set the bitmask for antenna")
+			return wrapfLow("can not set the bitmask for antenna")
 		}
 		return r.SetBitmask(TxControlReg, 0x03)
 	}
@@ -114,20 +105,20 @@ func (r *LowLevel) SetAntenna(state bool) error {
 // String implements conn.Resource.
 func (r *LowLevel) String() string {
 	return fmt.Sprintf("Mifare MFRC522 [bus: %v, reset pin: %s, irq pin: %s]",
-		r.spiDev, r.resetPin.Name(), r.irqPin.Name())
+		r.bus, r.resetPin.Get(), r.irqPin.Get())
 }
 
 // DevWrite sends data to a device.
 func (r *LowLevel) DevWrite(address int, data byte) error {
 	newData := []byte{(byte(address) << 1) & 0x7E, data}
-	return r.spiDev.Tx(newData, nil)
+	return r.bus.Tx(newData, nil)
 }
 
 // DevRead gets data from a device.
 func (r *LowLevel) DevRead(address int) (byte, error) {
 	data := []byte{((byte(address) << 1) & 0x7E) | 0x80, 0}
 	out := make([]byte, len(data))
-	if err := r.spiDev.Tx(data, out); err != nil {
+	if err := r.bus.Tx(data, out); err != nil {
 		return 0, err
 	}
 	return out[1], nil
@@ -198,7 +189,7 @@ func (r *LowLevel) WaitForEdge(timeout time.Duration) error {
 	irqChannel := make(chan bool)
 	go func() {
 		defer close(irqChannel)
-		irqChannel <- r.irqPin.WaitForEdge(timeout)
+		irqChannel <- false
 	}()
 
 	if err := r.Init(); err != nil {
@@ -214,10 +205,10 @@ func (r *LowLevel) WaitForEdge(timeout time.Duration) error {
 		}
 		select {
 		case <-r.stop:
-			return wrapf("halt")
+			return wrapfLow("halt")
 		case irqResult := <-irqChannel:
 			if !irqResult {
-				return wrapf("timeout waiting for IRQ edge: %v", timeout)
+				return wrapfLow("timeout waiting for IRQ edge: %v", timeout)
 			}
 			return nil
 		case <-time.After(100 * time.Millisecond):
@@ -228,7 +219,6 @@ func (r *LowLevel) WaitForEdge(timeout time.Duration) error {
 
 // ClearInterrupt removes any pending host interrupts
 func (r *LowLevel) ClearInterrupt() {
-	r.irqPin.WaitForEdge(0)
 }
 
 // Auth authenticate the card fof the sector/block using the provided data.
@@ -320,7 +310,7 @@ func (r *LowLevel) CardWrite(command byte, data []byte) ([]byte, int, error) {
 	}
 
 	if i == 0 {
-		return nil, -1, wrapf("can't read data after 2000 loops")
+		return nil, -1, wrapfLow("can't read data after 2000 loops")
 	}
 
 	if d, err := r.DevRead(ErrorReg); err != nil || d&0x1B != 0 {
@@ -328,7 +318,7 @@ func (r *LowLevel) CardWrite(command byte, data []byte) ([]byte, int, error) {
 	}
 
 	if n&irqEn&0x01 == 1 {
-		return nil, -1, wrapf("IRQ error")
+		return nil, -1, wrapfLow("IRQ error")
 	}
 
 	if command == PCD_TRANSCEIVE {
@@ -384,7 +374,7 @@ func (r *LowLevel) writeCommandSequence(commands [][]byte) error {
 	return nil
 }
 
-func wrapf(format string, a ...interface{}) error {
+func wrapfLow(format string, a ...interface{}) error {
 	return fmt.Errorf("mfrc522 lowlevel: "+format, a...)
 }
 
